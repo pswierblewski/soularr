@@ -500,16 +500,16 @@ def search_for_album(album):
         username = result["username"]
         if username not in search_cache[album_id]:
             search_cache[album_id][username] = {}
-            logger.info(f"Caching and truncating results for user: {username}")
-            init_files = result["files"]
-            for file in init_files:
-                file_dir = file["filename"].rsplit("\\", 1)[0]
-                for allowed_filetype in allowed_filetypes:
-                    if verify_filetype(file, allowed_filetype):
-                        if allowed_filetype not in search_cache[album_id][username]:
-                            search_cache[album_id][username][allowed_filetype] = []
-                        if file_dir not in search_cache[album_id][username][allowed_filetype]:
-                            search_cache[album_id][username][allowed_filetype].append(file_dir)
+        logger.info(f"Caching and truncating results for user: {username}")
+        init_files = result["files"]
+        for file in init_files:
+            file_dir = file["filename"].rsplit("\\", 1)[0]
+            for allowed_filetype in allowed_filetypes:
+                if verify_filetype(file, allowed_filetype):
+                    if allowed_filetype not in search_cache[album_id][username]:
+                        search_cache[album_id][username][allowed_filetype] = []
+                    if file_dir not in search_cache[album_id][username][allowed_filetype]:
+                        search_cache[album_id][username][allowed_filetype].append(file_dir)
     return True
 
 

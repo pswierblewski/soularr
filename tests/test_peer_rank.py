@@ -1,3 +1,6 @@
+import ast
+from pathlib import Path
+
 from peer_rank import peer_upload_speed, rank_search_responses
 
 
@@ -40,3 +43,46 @@ def test_rank_stable_on_equal_speed():
     ]
     ranked = rank_search_responses(results)
     assert [r["username"] for r in ranked] == ["aaa", "bbb"]
+
+
+def test_search_cache_username_order_follows_speed_ranking():
+    ranked = rank_search_responses(
+        [
+            {"username": "slow", "uploadSpeed": 10},
+            {"username": "fast", "uploadSpeed": 1000},
+            {"username": "medium", "uploadSpeed": 100},
+        ]
+    )
+    album_cache = {}
+    for result in ranked:
+        album_cache.setdefault(result["username"], {})
+
+    assert list(album_cache) == ["fast", "medium", "slow"]
+
+
+def test_search_cache_file_merge_stays_outside_new_username_guard():
+    module = ast.parse((Path(__file__).parent.parent / "soularr.py").read_text())
+    search_for_album = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "search_for_album"
+    )
+    cache_loop = next(
+        node
+        for node in ast.walk(search_for_album)
+        if isinstance(node, ast.For)
+        and isinstance(node.iter, ast.Name)
+        and node.iter.id == "ranked_results"
+    )
+    new_username_guard = next(node for node in cache_loop.body if isinstance(node, ast.If))
+
+    assert len(new_username_guard.body) == 1
+    assert isinstance(new_username_guard.body[0], ast.Assign)
+    assert any(
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "init_files"
+            for target in node.targets
+        )
+        for node in cache_loop.body
+    )
