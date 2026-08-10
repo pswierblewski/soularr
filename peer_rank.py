@@ -35,3 +35,29 @@ def rank_search_responses(search_results: list) -> list:
             first_index[result["username"]],
         ),
     )
+
+
+def fill_search_cache(
+    search_cache: dict,
+    album_id,
+    ranked_results: list,
+    allowed_filetypes,
+    verify_filetype,
+) -> None:
+    """Merge ranked search results into an album's per-user directory cache."""
+    if album_id not in search_cache:
+        search_cache[album_id] = {}
+
+    album_cache = search_cache[album_id]
+    for result in ranked_results:
+        username = result["username"]
+        if username not in album_cache:
+            album_cache[username] = {}
+        for file in result["files"]:
+            file_dir = file["filename"].rsplit("\\", 1)[0]
+            for allowed_filetype in allowed_filetypes:
+                if verify_filetype(file, allowed_filetype):
+                    if allowed_filetype not in album_cache[username]:
+                        album_cache[username][allowed_filetype] = []
+                    if file_dir not in album_cache[username][allowed_filetype]:
+                        album_cache[username][allowed_filetype].append(file_dir)

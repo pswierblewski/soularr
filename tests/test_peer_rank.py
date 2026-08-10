@@ -1,7 +1,4 @@
-import ast
-from pathlib import Path
-
-from peer_rank import peer_upload_speed, rank_search_responses
+from peer_rank import fill_search_cache, peer_upload_speed, rank_search_responses
 
 
 def test_peer_upload_speed_missing_and_null_are_zero():
@@ -45,44 +42,41 @@ def test_rank_stable_on_equal_speed():
     assert [r["username"] for r in ranked] == ["aaa", "bbb"]
 
 
-def test_search_cache_username_order_follows_speed_ranking():
-    ranked = rank_search_responses(
-        [
-            {"username": "slow", "uploadSpeed": 10},
-            {"username": "fast", "uploadSpeed": 1000},
-            {"username": "medium", "uploadSpeed": 100},
-        ]
-    )
-    album_cache = {}
-    for result in ranked:
-        album_cache.setdefault(result["username"], {})
+def test_fill_search_cache_preserves_ranked_order_and_merges_duplicate_user():
+    ranked_results = [
+        {
+            "username": "fast",
+            "uploadSpeed": 1000,
+            "files": [{"filename": r"fast\disc 1\01.flac"}],
+        },
+        {
+            "username": "medium",
+            "uploadSpeed": 100,
+            "files": [{"filename": r"medium\album\01.flac"}],
+        },
+        {
+            "username": "fast",
+            "uploadSpeed": 10,
+            "files": [{"filename": r"fast\disc 2\02.flac"}],
+        },
+        {
+            "username": "slow",
+            "uploadSpeed": 1,
+            "files": [{"filename": r"slow\album\01.mp3"}],
+        },
+    ]
+    search_cache = {}
 
-    assert list(album_cache) == ["fast", "medium", "slow"]
-
-
-def test_search_cache_file_merge_stays_outside_new_username_guard():
-    module = ast.parse((Path(__file__).parent.parent / "soularr.py").read_text())
-    search_for_album = next(
-        node
-        for node in module.body
-        if isinstance(node, ast.FunctionDef) and node.name == "search_for_album"
+    fill_search_cache(
+        search_cache,
+        album_id=42,
+        ranked_results=ranked_results,
+        allowed_filetypes=["flac"],
+        verify_filetype=lambda file, filetype: file["filename"].endswith(f".{filetype}"),
     )
-    cache_loop = next(
-        node
-        for node in ast.walk(search_for_album)
-        if isinstance(node, ast.For)
-        and isinstance(node.iter, ast.Name)
-        and node.iter.id == "ranked_results"
-    )
-    new_username_guard = next(node for node in cache_loop.body if isinstance(node, ast.If))
 
-    assert len(new_username_guard.body) == 1
-    assert isinstance(new_username_guard.body[0], ast.Assign)
-    assert any(
-        isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "init_files"
-            for target in node.targets
-        )
-        for node in cache_loop.body
-    )
+    assert list(search_cache[42]) == ["fast", "medium", "slow"]
+    assert search_cache[42]["fast"]["flac"] == [
+        r"fast\disc 1",
+        r"fast\disc 2",
+    ]

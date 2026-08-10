@@ -16,7 +16,7 @@ from datetime import datetime
 import copy
 import music_tag
 import slskd_api
-from peer_rank import peer_upload_speed, rank_search_responses
+from peer_rank import fill_search_cache, peer_upload_speed, rank_search_responses
 from pyarr import LidarrAPI
 from slskd_api.apis import users
 
@@ -486,9 +486,6 @@ def search_for_album(album):
     if not len(search_results) > 0:
         return False
 
-    if album_id not in search_cache:
-        search_cache[album_id] = {}
-
     ranked_results = rank_search_responses(search_results)
     peer_order = ", ".join(
         f"{result['username']}({peer_upload_speed(result)} B/s)"
@@ -496,20 +493,13 @@ def search_for_album(album):
     )
     logger.info(f"Peer order by uploadSpeed (top {min(10, len(ranked_results))}): {peer_order}")
 
-    for result in ranked_results:
-        username = result["username"]
-        if username not in search_cache[album_id]:
-            search_cache[album_id][username] = {}
-        logger.info(f"Caching and truncating results for user: {username}")
-        init_files = result["files"]
-        for file in init_files:
-            file_dir = file["filename"].rsplit("\\", 1)[0]
-            for allowed_filetype in allowed_filetypes:
-                if verify_filetype(file, allowed_filetype):
-                    if allowed_filetype not in search_cache[album_id][username]:
-                        search_cache[album_id][username][allowed_filetype] = []
-                    if file_dir not in search_cache[album_id][username][allowed_filetype]:
-                        search_cache[album_id][username][allowed_filetype].append(file_dir)
+    fill_search_cache(
+        search_cache,
+        album_id,
+        ranked_results,
+        allowed_filetypes,
+        verify_filetype,
+    )
     return True
 
 
