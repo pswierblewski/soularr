@@ -1,6 +1,10 @@
 ![banner](https://raw.githubusercontent.com/mrusse/soularr/refs/heads/main/resources/banner.png)
 
 <h1 align="center">Soularr</h1>
+> **Fork note:** This is `pswierblewski/soularr`, based on [mrusse/soularr](https://github.com/mrusse/soularr).
+> Difference: after a Soulseek search, peers are tried in **`uploadSpeed` descending** order (missing speed last).
+> Image: `ghcr.io/pswierblewski/soularr:latest`
+
 <p align="center">
   A Python script that connects Lidarr with Soulseek!
 </p>
