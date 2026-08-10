@@ -16,6 +16,7 @@ from datetime import datetime
 import copy
 import music_tag
 import slskd_api
+from peer_rank import peer_upload_speed, rank_search_responses
 from pyarr import LidarrAPI
 from slskd_api.apis import users
 
@@ -486,24 +487,29 @@ def search_for_album(album):
         return False
 
     if album_id not in search_cache:
-        search_cache[album_id] = {}  # This is so we can check for matches we missed or if a user goes offline during our download
+        search_cache[album_id] = {}
 
-    for result in search_results:  # Switching to cached version. One less API call
+    ranked_results = rank_search_responses(search_results)
+    peer_order = ", ".join(
+        f"{result['username']}({peer_upload_speed(result)} B/s)"
+        for result in ranked_results[:10]
+    )
+    logger.info(f"Peer order by uploadSpeed (top {min(10, len(ranked_results))}): {peer_order}")
+
+    for result in ranked_results:
         username = result["username"]
         if username not in search_cache[album_id]:
-            # If we don't currently have a cache for a user set one up
             search_cache[album_id][username] = {}
-        logger.info(f"Caching and truncating results for user: {username}")
-        init_files = result["files"]  # init_files short for initial files. Before truncating
-        # Search the returned files and only cache files that are of the allowed_filetypes
-        for file in init_files:
-            file_dir = file["filename"].rsplit("\\", 1)[0]  # split dir/filenames on \
-            for allowed_filetype in allowed_filetypes:
-                if verify_filetype(file, allowed_filetype):  # Check the filename for an allowed type
-                    if allowed_filetype not in search_cache[album_id][username]:
-                        search_cache[album_id][username][allowed_filetype] = []  # Init the cache for this allowed filetype
-                    if file_dir not in search_cache[album_id][username][allowed_filetype]:
-                        search_cache[album_id][username][allowed_filetype].append(file_dir)
+            logger.info(f"Caching and truncating results for user: {username}")
+            init_files = result["files"]
+            for file in init_files:
+                file_dir = file["filename"].rsplit("\\", 1)[0]
+                for allowed_filetype in allowed_filetypes:
+                    if verify_filetype(file, allowed_filetype):
+                        if allowed_filetype not in search_cache[album_id][username]:
+                            search_cache[album_id][username][allowed_filetype] = []
+                        if file_dir not in search_cache[album_id][username][allowed_filetype]:
+                            search_cache[album_id][username][allowed_filetype].append(file_dir)
     return True
 
 
