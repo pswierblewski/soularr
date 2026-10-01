@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements-dev.txt
-      - run: pytest tests/test_peer_rank.py -v
+      - run: pytest tests/ -q
 
   docker:
     needs: test

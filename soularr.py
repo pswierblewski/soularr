@@ -16,6 +16,14 @@ from datetime import datetime
 import copy
 import music_tag
 import slskd_api
+from enqueue_diagnostics import (
+    AlbumEnqueueFailureReport,
+    ReleaseEnqueueDiagnostics,
+    album_filename_analysis,
+    best_filename_ratio,
+    folder_tail,
+    release_diag_label,
+)
 from peer_rank import fill_search_cache, peer_upload_speed, rank_search_responses
 from pyarr import LidarrAPI
 from slskd_api.apis import users
@@ -95,30 +103,17 @@ def album_match(lidarr_tracks, slskd_tracks, username, filetype):
 
     lidarr_album = lidarr.get_album(lidarr_tracks[0]["albumId"])
     lidarr_album_name = lidarr_album["title"]
-    lidarr_artist_name = lidarr_album["artist"]["artistName"]
 
+    ext = filetype.split(" ")[0]
     for lidarr_track in lidarr_tracks:
-        lidarr_filename = lidarr_track["title"] + "." + filetype.split(" ")[0]
+        lidarr_filename = lidarr_track["title"] + "." + ext
         best_match = 0.0
 
         for slskd_track in slskd_tracks:
-            slskd_filename = slskd_track["filename"]
-
-            # Try to match the ratio with the exact filenames
-            ratio = difflib.SequenceMatcher(None, lidarr_filename, slskd_filename).ratio()
-
-            # If ratio is a bad match try and split off (with " " as the separator) the garbage at the start of the slskd_filename and try again
-            ratio = check_ratio(" ", ratio, lidarr_filename, slskd_filename)
-            # Same but with "_" as the separator
-            ratio = check_ratio("_", ratio, lidarr_filename, slskd_filename)
-
-            # Same checks but preappend album name.
-            ratio = check_ratio("", ratio, lidarr_album_name + " " + lidarr_filename, slskd_filename)
-            ratio = check_ratio(" ", ratio, lidarr_album_name + " " + lidarr_filename, slskd_filename)
-            ratio = check_ratio("_", ratio, lidarr_album_name + " " + lidarr_filename, slskd_filename)
-
-            if ratio > best_match:
-                best_match = ratio
+            best_match = max(
+                best_match,
+                best_filename_ratio(lidarr_filename, slskd_track["filename"], lidarr_album_name, minimum_match_ratio),
+            )
 
         if best_match > minimum_match_ratio:
             counted.append(lidarr_filename)
@@ -346,7 +341,7 @@ def download_filter(allowed_filetype, directory):
     return directory  # If we didn't find unwanted files or we aren't filtering just return the original list
 
 
-def check_for_match(tracks, allowed_filetype, file_dirs, username):
+def check_for_match(tracks, allowed_filetype, file_dirs, username, diag: ReleaseEnqueueDiagnostics | None = None):
     """
     Does the actual match checking on a single disk/album.
     """
@@ -383,12 +378,39 @@ def check_for_match(tracks, allowed_filetype, file_dirs, username):
 
         track_num = len(tracks)
         tracks_info = album_track_num(directory)
+        if diag is not None:
+            diag.note_folder_checked()
 
         if tracks_info["count"] == track_num and tracks_info["filetype"] != "":
             if album_match(tracks, directory["files"], username, allowed_filetype):
                 return True, directory, file_dir
-            else:
-                continue
+            if diag is not None:
+                lidarr_album = lidarr.get_album(tracks[0]["albumId"])
+                analysis = album_filename_analysis(
+                    tracks,
+                    directory["files"],
+                    allowed_filetype,
+                    lidarr_album["title"],
+                    minimum_match_ratio,
+                )
+                diag.note_filename_mismatch(
+                    username,
+                    file_dir,
+                    analysis["matched"],
+                    analysis["total"],
+                    analysis["worst_ratio"],
+                    analysis["worst_track"],
+                    analysis["worst_peer_file"],
+                )
+            continue
+
+        if diag is not None and tracks_info["count"] > 0:
+            diag.note_track_count_mismatch(
+                username,
+                file_dir,
+                tracks_info["count"],
+                mixed_filetypes=tracks_info["filetype"] == "",
+            )
     return False, {}, ""
 
 
@@ -512,7 +534,7 @@ def slskd_do_enqueue(username, files, file_dir):
     try:
         enqueue = slskd.transfers.enqueue(username=username, files=files)
     except Exception:
-        logger.debug("Enqueue failed", exc_info=True)
+        logger.warning(f"slskd enqueue API error for user={username} files={len(files)}", exc_info=True)
         return None
     if enqueue:
         time.sleep(5)
@@ -533,9 +555,15 @@ def slskd_do_enqueue(username, files, file_dir):
                             file_details["username"] = username
                             file_details["size"] = file["size"]
                             downloads.append(file_details)
+        if len(downloads) != len(files):
+            logger.warning(
+                f"slskd enqueue verified {len(downloads)}/{len(files)} files for user={username} "
+                f"folder={folder_tail(file_dir)} (path mismatch or empty queue entry)"
+            )
+            return None
         return downloads
-    else:
-        return None
+    logger.warning(f"slskd enqueue returned false for user={username} files={len(files)}")
+    return None
 
 
 def slskd_download_status(downloads):
@@ -581,7 +609,7 @@ def downloads_all_done(downloads):
     return all_done, error_list, remote_queue
 
 
-def try_enqueue(all_tracks, results, allowed_filetype):
+def try_enqueue(all_tracks, results, allowed_filetype, diag: ReleaseEnqueueDiagnostics | None = None):
     """
     Single album match and enqueue.
     Iterates over all users and enqueues a found match
@@ -591,7 +619,7 @@ def try_enqueue(all_tracks, results, allowed_filetype):
             continue
         logger.debug(f"Parsing result from user: {username}")
         file_dirs = results[username][allowed_filetype]
-        found, directory, file_dir = check_for_match(all_tracks, allowed_filetype, file_dirs, username)
+        found, directory, file_dir = check_for_match(all_tracks, allowed_filetype, file_dirs, username, diag)
         if found:
             directory = download_filter(allowed_filetype, directory)
             for i in range(0, len(directory["files"])):
@@ -600,26 +628,16 @@ def try_enqueue(all_tracks, results, allowed_filetype):
                 downloads = slskd_do_enqueue(username=username, files=directory["files"], file_dir=file_dir)
                 if downloads is not None:
                     return True, downloads
-                else:
-                    album = lidarr.get_album(all_tracks[0]["albumId"])
-                    album_name = album["title"]
-                    artist_name = album["artist"]["artistName"]
-                    logger.info(f"Failed to enqueue download to slskd for {artist_name} - {album_name} from {username}")
+                if diag is not None:
+                    diag.note_match_enqueue_failed(username, file_dir, "slskd_enqueue")
             except Exception as e:
-                album = lidarr.get_album(all_tracks[0]["albumId"])
-                album_name = album["title"]
-                artist_name = album["artist"]["artistName"]
-
-                logger.warning(f"Exception enqueueing tracks: {e}")
-                logger.info(f"Exception enqueueing download to slskd for {artist_name} - {album_name} from {username}")
-    album = lidarr.get_album(all_tracks[0]["albumId"])
-    album_name = album["title"]
-    artist_name = album["artist"]["artistName"]
-    logger.info(f"Failed to enqueue {artist_name} - {album_name}")
+                if diag is not None:
+                    diag.note_match_enqueue_failed(username, file_dir, f"exception:{e}")
+                logger.warning(f"Exception enqueueing tracks for user={username}: {e}", exc_info=True)
     return False, None
 
 
-def try_multi_enqueue(release, all_tracks, results, allowed_filetype):
+def try_multi_enqueue(release, all_tracks, results, allowed_filetype, diag: ReleaseEnqueueDiagnostics | None = None):
     """
     This is the multi-disk/media path for locating and enqueueing an album
     It does a flat search first. Then it does a split search.
@@ -644,7 +662,9 @@ def try_multi_enqueue(release, all_tracks, results, allowed_filetype):
             if allowed_filetype not in tmp_results[username]:
                 continue
             file_dirs = results[username][allowed_filetype]
-            found, directory, file_dir = check_for_match(disk["tracks"], allowed_filetype, file_dirs, username)
+            found, directory, file_dir = check_for_match(
+                disk["tracks"], allowed_filetype, file_dirs, username, diag
+            )
             if found:
                 directory = download_filter(allowed_filetype, directory)
                 disk["source"] = (username, directory, file_dir)
@@ -671,21 +691,16 @@ def try_multi_enqueue(release, all_tracks, results, allowed_filetype):
                     all_downloads.extend(downloads)
                     enqueued += 1
                 else:
-                    album = lidarr.get_album(all_tracks[0]["albumId"])
-                    album_name = album["title"]
-                    artist_name = album["artist"]["artistName"]
-                    logger.info(f"Failed to enqueue download to slskd for {artist_name} - {album_name} from {username}")
+                    if diag is not None:
+                        diag.note_match_enqueue_failed(username, file_dir, "slskd_enqueue_multi_disc")
                     # Delete ALL other downloads in all_downloads list
                     if len(all_downloads) > 0:
                         cancel_and_delete(all_downloads)
                         return False, None
             except Exception:
-                album = lidarr.get_album(all_tracks[0]["albumId"])
-                album_name = album["title"]
-                artist_name = album["artist"]["artistName"]
-
+                if diag is not None:
+                    diag.note_match_enqueue_failed(username, file_dir, "exception_multi_disc")
                 logger.exception("Exception enqueueing tracks")
-                logger.info(f"Exception enqueueing download to slskd for {artist_name} - {album_name} from {username}")
                 # Delete all other downloads in all_downloads list
                 if len(all_downloads) > 0:
                     cancel_and_delete(all_downloads)
@@ -712,6 +727,7 @@ def find_download(album, grab_list):
     artist_name = album["artist"]["artistName"]
     artist_id = album["artistId"]
     results = search_cache[album_id]
+    failure_report = AlbumEnqueueFailureReport(artist_name, album["title"], len(results))
     for allowed_filetype in allowed_filetypes:
         logger.info(f"Checking for Quality: {allowed_filetype}")
         releases = lidarr.get_album(album_id)["releases"]
@@ -723,7 +739,9 @@ def find_download(album, grab_list):
             releases.remove(release)
             release_id = release["id"]
             all_tracks = lidarr.get_tracks(artistId=artist_id, albumId=album_id, albumReleaseId=release_id)
-            found, downloads = try_enqueue(all_tracks, results, allowed_filetype)
+            release_diag = ReleaseEnqueueDiagnostics()
+            release_diag.begin_release(release_diag_label(release), len(all_tracks))
+            found, downloads = try_enqueue(all_tracks, results, allowed_filetype, release_diag)
 
             if found:
                 grab_list[album_id] = {}
@@ -733,8 +751,11 @@ def find_download(album, grab_list):
                 grab_list[album_id]["artist"] = artist_name
                 grab_list[album_id]["year"] = album["releaseDate"][0:4]
                 return True
-            elif len(release["media"]) > 1:
-                found, downloads = try_multi_enqueue(release, all_tracks, results, allowed_filetype)
+            failure_report.add_release(release_diag)
+            if len(release["media"]) > 1:
+                multi_diag = ReleaseEnqueueDiagnostics()
+                multi_diag.begin_release(release_diag_label(release) + " (multi-disc)", len(all_tracks))
+                found, downloads = try_multi_enqueue(release, all_tracks, results, allowed_filetype, multi_diag)
                 if found:
                     grab_list[album_id] = {}
                     grab_list[album_id]["files"] = downloads
@@ -743,6 +764,8 @@ def find_download(album, grab_list):
                     grab_list[album_id]["artist"] = artist_name
                     grab_list[album_id]["year"] = album["releaseDate"][0:4]
                     return True
+                failure_report.add_release(multi_diag)
+    failure_report.emit(minimum_match_ratio)
     return False
 
 

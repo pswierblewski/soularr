@@ -2,7 +2,7 @@ FROM python:3.11
 
 WORKDIR /app
 
-COPY requirements.txt soularr.py peer_rank.py run.sh .
+COPY requirements.txt soularr.py peer_rank.py enqueue_diagnostics.py run.sh .
 COPY webui/ webui/
 COPY resources/ resources/
 
