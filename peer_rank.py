@@ -1,5 +1,7 @@
 """Rank slskd search responses by peer uploadSpeed (soularr fork)."""
 
+from collections import Counter
+
 
 def peer_upload_speed(result: dict) -> int:
     speed = result.get("uploadSpeed")
@@ -61,3 +63,35 @@ def fill_search_cache(
                         album_cache[username][allowed_filetype] = []
                     if file_dir not in album_cache[username][allowed_filetype]:
                         album_cache[username][allowed_filetype].append(file_dir)
+
+
+def peer_folder_audio_counts(ranked_results: list, allowed_filetypes: list, verify_filetype) -> list[tuple[int, int]]:
+    """
+    Histogram of audio file counts per folder as seen in search snippets.
+    Returns [(track_count, folder_hits), ...] sorted by folder_hits descending.
+    """
+    histogram: Counter[int] = Counter()
+    for result in ranked_results:
+        per_dir: dict[str, int] = {}
+        for file in result.get("files", []):
+            for allowed_filetype in allowed_filetypes:
+                if not verify_filetype(file, allowed_filetype):
+                    continue
+                file_dir = file["filename"].rsplit("\\", 1)[0]
+                per_dir[file_dir] = per_dir.get(file_dir, 0) + 1
+        for count in per_dir.values():
+            histogram[count] += 1
+    return histogram.most_common()
+
+
+def sort_releases_by_peer_track_count(releases: list, peer_histogram: list[tuple[int, int]]) -> list:
+    """Order releases so track counts matching Soulseek folders are tried first."""
+    if not peer_histogram or not releases:
+        return releases
+    preferred = peer_histogram[0][0]
+
+    def sort_key(release: dict) -> tuple:
+        track_count = release.get("trackCount") or 0
+        return (abs(track_count - preferred), -track_count)
+
+    return sorted(releases, key=sort_key)

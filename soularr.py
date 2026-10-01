@@ -24,7 +24,13 @@ from enqueue_diagnostics import (
     folder_tail,
     release_diag_label,
 )
-from peer_rank import fill_search_cache, peer_upload_speed, rank_search_responses
+from peer_rank import (
+    fill_search_cache,
+    peer_folder_audio_counts,
+    peer_upload_speed,
+    rank_search_responses,
+    sort_releases_by_peer_track_count,
+)
 from pyarr import LidarrAPI
 from slskd_api.apis import users
 
@@ -522,6 +528,10 @@ def search_for_album(album):
         allowed_filetypes,
         verify_filetype,
     )
+    peer_hist = peer_folder_audio_counts(ranked_results, allowed_filetypes, verify_filetype)
+    search_cache[f"{album_id}_peer_track_hist"] = peer_hist
+    if peer_hist:
+        logger.info(f"Peer folder track counts (top): {peer_hist[:6]}")
     return True
 
 
@@ -727,10 +737,18 @@ def find_download(album, grab_list):
     artist_name = album["artist"]["artistName"]
     artist_id = album["artistId"]
     results = search_cache[album_id]
+    peer_hist = search_cache.get(f"{album_id}_peer_track_hist", [])
     failure_report = AlbumEnqueueFailureReport(artist_name, album["title"], len(results))
     for allowed_filetype in allowed_filetypes:
         logger.info(f"Checking for Quality: {allowed_filetype}")
         releases = lidarr.get_album(album_id)["releases"]
+        if peer_hist and not use_selected_lidarr_release:
+            preferred = peer_hist[0][0]
+            releases = sort_releases_by_peer_track_count(releases, peer_hist)
+            logger.info(
+                f"Peer-informed release order for {artist_name}: preferred_track_count={preferred} "
+                f"from histogram {peer_hist[:5]}"
+            )
         num_releases = len(releases)
         for _ in range(0, num_releases):
             if len(releases) == 0:

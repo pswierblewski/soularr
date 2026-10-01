@@ -1,4 +1,10 @@
-from peer_rank import fill_search_cache, peer_upload_speed, rank_search_responses
+from peer_rank import (
+    fill_search_cache,
+    peer_folder_audio_counts,
+    peer_upload_speed,
+    rank_search_responses,
+    sort_releases_by_peer_track_count,
+)
 
 
 def test_peer_upload_speed_missing_and_null_are_zero():
@@ -80,3 +86,23 @@ def test_fill_search_cache_preserves_ranked_order_and_merges_duplicate_user():
         r"fast\disc 1",
         r"fast\disc 2",
     ]
+
+
+def test_peer_folder_audio_counts_histogram():
+    ranked = [
+        {"files": [{"filename": r"u1\ATB-Killer\01.flac"}, {"filename": r"u1\ATB-Killer\02.flac"}]},
+        {"files": [{"filename": r"u2\ATB-Killer\01.flac"}, {"filename": r"u2\ATB-Killer\02.flac"},
+                   {"filename": r"u2\ATB-Killer\03.flac"}, {"filename": r"u2\ATB-Killer\04.flac"}]},
+    ]
+    hist = peer_folder_audio_counts(ranked, ["flac"], lambda f, t: f["filename"].endswith(".flac"))
+    assert set(hist) == {(4, 1), (2, 1)}
+
+
+def test_sort_releases_by_peer_track_count():
+    releases = [
+        {"id": 1, "trackCount": 2},
+        {"id": 2, "trackCount": 4},
+        {"id": 3, "trackCount": 6},
+    ]
+    ordered = sort_releases_by_peer_track_count(releases, [(4, 5)])
+    assert [r["id"] for r in ordered] == [2, 3, 1]

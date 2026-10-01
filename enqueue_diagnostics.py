@@ -155,7 +155,22 @@ class AlbumEnqueueFailureReport:
                 f"lidarr_track={worst_track!r} peer_file={worst_file!r}"
             )
 
-        logger.warning(" | ".join(parts))
+        summary = " | ".join(parts)
+        logger.warning(summary)
+        if closest:
+            diff, user, folder, peer_count = closest[0]
+            wanted = closest[1]
+            logger.info(
+                f"Enqueue detail closest_track_count: user={user} folder={folder} "
+                f"peer_files={peer_count} lidarr_tracks={wanted} delta={diff}"
+            )
+        if best_fn:
+            matched, total, worst_ratio, user, folder, worst_track, worst_file = best_fn[0]
+            logger.info(
+                f"Enqueue detail best_filename_near: release={best_fn[2]} user={user} folder={folder} "
+                f"matched={matched}/{total} worst_ratio={worst_ratio:.3f} "
+                f"lidarr_track={worst_track!r} peer_file={worst_file!r}"
+            )
 
 
 def check_ratio(separator: str, ratio: float, lidarr_filename: str, slskd_filename: str, minimum_match_ratio: float) -> float:
