@@ -742,6 +742,15 @@ def find_download(album, grab_list):
     for allowed_filetype in allowed_filetypes:
         logger.info(f"Checking for Quality: {allowed_filetype}")
         releases = lidarr.get_album(album_id)["releases"]
+        if use_selected_lidarr_release:
+            monitored_releases = [r for r in releases if r.get("monitored")]
+            if monitored_releases:
+                releases = monitored_releases
+            else:
+                logger.warning(
+                    f"No monitored Lidarr release for {artist_name} - {album['title']}; "
+                    "falling back to all releases (pick one in Lidarr UI or disable use_selected_lidarr_release)"
+                )
         if peer_hist and not use_selected_lidarr_release:
             preferred = peer_hist[0][0]
             releases = sort_releases_by_peer_track_count(releases, peer_hist)
