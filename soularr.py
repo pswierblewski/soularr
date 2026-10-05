@@ -429,6 +429,62 @@ def is_blacklisted(title: str) -> bool:
     return False
 
 
+def parse_priority_album_ids() -> list[int]:
+    raw = config.get("Search Settings", "priority_lidarr_album_ids", fallback="").strip()
+    if not raw:
+        return []
+    ids: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.append(int(part))
+        except ValueError:
+            logger.warning(f"Ignoring invalid priority_lidarr_album_ids entry: {part!r}")
+    return ids
+
+
+def apply_album_priority(albums: list) -> list:
+    """
+    Prepend configured Lidarr album IDs so they are searched every cycle, even when
+    incrementing_page would not yet reach them (e.g. large Wanted list sorted by title).
+    """
+    priority_ids = parse_priority_album_ids()
+    if not priority_ids:
+        return albums
+
+    by_id = {a["id"]: a for a in albums}
+    ordered: list = []
+    seen: set[int] = set()
+
+    for album_id in priority_ids:
+        if album_id in by_id:
+            ordered.append(by_id[album_id])
+            seen.add(album_id)
+            continue
+        try:
+            album = lidarr.get_album(album_id)
+        except Exception:
+            logger.exception(f"Failed to load priority Lidarr album id={album_id}")
+            continue
+        if not album.get("monitored"):
+            logger.warning(
+                f"Priority album id={album_id} ({album.get('title')}) is not monitored; skipping"
+            )
+            continue
+        ordered.append(album)
+        seen.add(album_id)
+
+    if not ordered:
+        return albums
+
+    rest = [a for a in albums if a["id"] not in seen]
+    names = [f"{a['artist']['artistName']} - {a['title']}" for a in ordered]
+    logger.info(f"Priority albums (search first): {', '.join(names)}")
+    return ordered + rest
+
+
 def filter_list(albums):
     """
     Helper to do all the various filtering in one go and in one place. Same net effect as the previous multi-stage approach
@@ -1476,6 +1532,7 @@ def main():
 
         if len(wanted_records) > 0:
             try:
+                wanted_records = apply_album_priority(wanted_records)
                 filtered = filter_list(wanted_records)
                 if filtered is not None:
                     failed = grab_most_wanted(filtered)
